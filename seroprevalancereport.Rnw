@@ -1,0 +1,524 @@
+\documentclass[hidelinks]{article}
+\usepackage[margin=1.5cm]{geometry}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{wrapfig}
+\usepackage{float}
+\usepackage{colortbl}
+\usepackage{pdflscape}
+\usepackage{tabu}
+\usepackage{threeparttable}
+\usepackage{threeparttablex}
+\usepackage[normalem]{ulem}
+\usepackage[normalem]{ulem}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{makecell}
+\usepackage{xcolor}
+\usepackage{caption}
+\usepackage{hyperref}
+
+
+\title{Patients with immune-mediated inflammatory diseases receiving cytokine inhibitors have low prevalence of SARS-CoV-2 seroconversion\\ Source data and analysis code to supplement submission to Nature Communications.}
+\author{See author list below}
+\date{July 3, 2020}
+
+
+\begin{document}
+\maketitle
+
+David Simon,Koray Tascilar,Gerhard Krönke, Arnd Kleyer, Mario M. Zaiss, Franz Heppt, Christine Meder, Raja Atreya, Entcho Klenske, Peter Dietrich, Abdullah Abdullah, Thorsten Kliem, Giulia Corte, Harriet Morf, Moritz Leppkes, Andreas E. Kremer, Andreas Ramming, Milena Pachowsky, Florian Schuch, Monika Ronneberger, Stefan Kleinert, Clara Maier, Axel J. Hueber, Karin Manger, Bernhard Manger, Carola Berking, Matthias Tenbusch, Klaus Überla, Michael Sticherling, Markus F. Neurath ,and Georg Schett
+
+\section{Load packages, read data, define custom functions}
+
+<<readdata,message=FALSE,warning=FALSE,error=FALSE,results='hide'>>=
+library(tidyverse)
+library(readxl)
+library(epitools)
+library(sandwich)
+library(kableExtra)
+library(ggbeeswarm)
+library(janitor)
+library(tables)
+library(broom)
+library(epitools)
+
+booktabs(titlerule="\\hline")
+
+firstdata<- read_excel("sarscov2seroprevalencedata.xlsx",
+                       guess_max = 2000)
+#pcrresults <- read_excel("pcrresults.xlsx")
+#socialdistancing <- read_excel("socialdistancing.xlsx") %>% distinct() %>% 
+#  group_by(tscID) %>% 
+#  filter(SocialDistancing%in% c("ja","nein"))
+
+
+#positivecontrols <- read_excel("positivecontrols.xlsx")
+cumcase <- read_excel("erlangencumulativecases.xlsx") %>% 
+  clean_names() %>% 
+  mutate(total=erlangen_stadt+hochstadt) %>% 
+  select(datum,totalcumcase=total)
+
+
+coviddatax  <-  firstdata %>% 
+  rename(oldtscID=tscID) %>% 
+  mutate(tscID=1:n(),
+         group=fct_relevel(fct_recode(group,`Healthcare Control`="Healthcare provider",
+                                      `Non-Healthcare Control`="General population",
+                                      `IMIDs Cytokine INH`="b-tsDMARD user",
+                                      `IMIDs Non-Cytokine INH`="no b-tsDMARD user"),
+                           c("Non-Healthcare Control",
+                             "Healthcare Control",
+                             "IMIDs Cytokine INH",
+                             "IMIDs Non-Cytokine INH"))) %>% 
+  arrange(group) 
+
+theme_set(theme_classic())
+@
+
+<<customfunctions>>=
+formateffectsize <- function(point,lower,upper,rounding=2,trans=FALSE){
+  if (trans) {
+    point <- exp(point)
+    lower <- exp(lower)
+    upper <- exp(upper)
+  }
+  paste0(
+    format(round(point,rounding),nsmall = rounding,trim = TRUE),
+    " (",
+    format(round(lower,rounding),nsmall = rounding,trim = TRUE),
+    " to ",
+    format(round(upper,rounding),nsmall = rounding,trim = TRUE),
+    ")",
+    sep = ""
+    
+  )
+}
+
+pvalformat <- function(x,rounding=3){
+  require(dplyr)
+  case_when(
+    x>0.99 ~ ">0.99",
+    x<0.001 ~ "<0.001",
+    TRUE ~ paste(format(round(x,rounding),nsmall = rounding))
+  )
+}
+
+
+mymeansd <- function(x,rounding=1){
+  a <- mean(x,na.rm = T)
+  b <- sd(x,na.rm = T)
+  if(is.na(a)|is.infinite(a)){
+    paste(("-"))
+  }else{
+    paste(format(round(a,rounding),nsmall = rounding),
+          " (",
+          format(round(b,rounding),nsmall = rounding)
+          ,")",sep = "")
+  }
+}
+
+npercent <- function(x,y,rounding=1){
+  percentage=round(100*length(x)/length(y),rounding)
+  if(is.na(percentage)|is.infinite(percentage)){
+    paste("-")
+  }else{
+    paste(length(x),
+          " (",
+          format(percentage,nsmall = rounding),
+          ")",
+          sep = "")}}
+
+@
+
+\section{Description of the study group.}
+
+\subsection{Baseline characteristics.}
+<<desctabs>>=
+table1 <- coviddatax %>% 
+  rename(smoking=46, txcategory=57) %>% 
+  mutate(chronische_Atemwegserkr=
+           as.numeric(chronische_Atemwegserkr%in%c(1,2)),
+         dx=fct_lump_min(dx,min=20),
+         txcategory=fct_lump_min(txcategory,min = 39)) %>% 
+  tabular(
+    (N=1)*(` `=1)+
+      
+      (Age=age)*(` `=1)*(`mean(SD)`=mymeansd)+
+      
+      (Factor(sex,levelnames = c("Male","Female"))+
+         
+         Factor(smoking,levelnames = c("Never","Current","Past","Missing"))+
+         
+         (Diabetes=Factor(Diabetes_mellitus,levelnames = c("No","Yes","Missing")))+
+         
+         Factor(Hypertonie, levelnames = c("No","Yes","Missing"))+
+         
+         
+         (`Pulmonary disease`=Factor(chronische_Atemwegserkr,levelnames = c("No","Yes")))+
+         
+         (Treatment=Factor(txcategory))+
+         
+         (Diagnosis=Factor(dx)))*(
+           `N(\\%)`=Percent(denom = Equal(group),fn = npercent))+
+      
+      (BMI*mymeansd)
+    ~
+      
+      Factor(group),
+    data=.
+    
+  )
+
+write.csv.tabular(table1,"table1.csv")
+
+
+
+#Write source data for table
+coviddatax %>% 
+  rename(smoking=46, txcategory=57) %>% 
+  
+  mutate(chronische_Atemwegserkr=
+           as.numeric(chronische_Atemwegserkr%in%c(1,2)),
+         dx=fct_lump_min(dx,min=20),
+         txcategory=fct_lump_min(txcategory,min = 39)) %>% 
+  mutate(sex=factor(sex,labels = c("Male","Female"))) %>% 
+  select(tscID,group, Age=age,sex,BMI,smoking,Diabetes=Diabetes_mellitus,
+         Hypertension=Hypertonie,`Pulmonary disease`=chronische_Atemwegserkr,
+         Treatment=txcategory,Diagnosis=dx) %>% 
+  mutate_at(6:9,function(x) ifelse(x %in% c("keine Angabe","999"),NA,x)) %>% 
+  
+  arrange(tscID) %>% 
+  write.csv("table1sourcedata.csv")
+
+@
+
+\begin{landscape}
+\begin{table}
+\caption{Baseline characteristics}
+
+<<displaytable,echo=FALSE,results='asis'>>=
+table1
+@
+
+\end{table}
+\end{landscape}
+
+
+\subsection{Seropositivity stratified by group, age, sex and other covariates}
+<<stratified seropositivity>>=
+agecattable <- coviddatax %>% 
+  mutate(serostatus=factor(value>=0.8,
+                           labels = c("IgG (-)","IgG(+)")),
+         agecat=cut2(floor(age),cuts = c(20,40,60,80))) %>% 
+  tabular(((Heading(Age)*Factor(agecat,
+                                levelnames = c("<=19","20-39",
+                                               "40-59","60-79",">=80"),
+                                name = "Age"))+
+             (Sex=Factor(sex, levelnames = c("Male","Female")))+
+             
+             (Diabetes=Factor(Diabetes_mellitus,
+                              levelnames = c("No","Yes","Not reported")))+
+             (Hypertension=Factor(Hypertonie,
+                                  levelnames = c("No","Yes","Not reported")))+
+             (`Pulmonary disease`=Factor(chronische_Atemwegserkr,
+                                         levelnames = c("No","Yes","Not reported")))
+  ) *
+    Heading()*serostatus
+  ~
+    (Heading()*Percent(denom = Equal(group,agecat,Diabetes_mellitus,Hypertonie,chronische_Atemwegserkr,sex),fn = npercent))*
+    Heading()*group,data = .)
+
+#Save table as csv file
+write.csv.tabular(agecattable,"seropositivity_breakdown.csv")
+
+#Save source data as csv file
+coviddatax %>% 
+  mutate(serostatus=factor(value>=0.8,
+                           labels = c("IgG (-)","IgG(+)")),
+         agecat=cut2(floor(age),cuts = c(20,40,60,80)),
+         agecat=factor(agecat,labels = c("<=19","20-39",
+                                         "40-59","60-79",">=80")),
+         sex=factor(sex,labels = c("Male","Female")),
+         Diabetes_mellitus=factor(Diabetes_mellitus,labels = c("No","Yes","Not reported")),
+         Hypertonie=factor(Hypertonie,labels = c("No","Yes","Not reported")),
+         chronische_Atemwegserkr=factor(chronische_Atemwegserkr,labels = c("No","Yes","Not reported"))) %>% 
+  select(tscID,group,agecat,sex,
+         Diabetes_mellitus,Hypertension=Hypertonie,
+         `Chronic lung disese`=chronische_Atemwegserkr,
+         OD450nm=value,serostatus) %>% 
+  arrange(tscID) %>% 
+  write.csv("table2sourcedata.csv",row.names = F)
+
+@
+
+\begin{landscape}
+\begin{table}
+\caption{Seropositivity by characteristics}
+
+<<displayagecattable,echo=FALSE,results='asis'>>=
+agecattable
+@
+
+\end{table}
+\end{landscape}
+
+\section{Calculate prevalence and 95\% confidence intervals}
+
+
+<<plotprevalenceandci,fig.cap="Crude SARS-CoV-2 seroprevalance and confidence intervals.",fig.height=2>>=
+coviddatax %>% 
+  split(.$group) %>% 
+  map(~pois.exact(x = sum(.x$value>=0.8),pt = length(.x$value))) %>% 
+  bind_rows(.id = "group") %>% 
+  mutate(group=fct_relevel(group,
+                           c(levels(coviddatax$group))
+  )) %>% 
+  
+  ggplot(aes(fct_rev(group),rate)) + 
+  geom_point(shape=1, size=3)+
+  geom_errorbar(aes(ymin=lower,ymax=upper),width=0.1)+
+  labs(y="Proportion SARS CoV-2 IgG+",x=NULL)+
+  coord_flip()
+
+
+coviddatax %>% 
+  mutate(persontime=1) %>% 
+  split(.$group) %>% 
+  map(~epitools::pois.exact(x = sum(.x$value>=0.8),pt = length(.x$value))) %>% 
+  bind_rows(.id = "group") %>%
+  mutate(prevalence=formateffectsize(rate,lower,upper,rounding = 4)) %>% 
+  select(Group=group, `N`=pt, `Positive`=x, `Prevalence (95% CI)`=prevalence) %>%
+  kable(booktabs=T,
+        caption = "Crude seroprevalence of SARS-CoV-2 and 
+        Poisson approximated 95\\% confidence intervals") %>% 
+  kable_styling()
+@
+
+\section{Estimate adjusted relative risk of SARS-CoV-2 seropositivity}
+Groups were compared using Poisson regression with robust standard errors to calculate age and sex adjusted risk ratios. The reference level for the comparison was the general population. 
+This model adjusts for age, sex and the time of sampling. Instead of the number of days from the earliest sampling date, we used the total cumulative number of cases in Erlangen/Erlangen-Höchstadt on the date of sampling for adjustment, this would reflect the probability of being exposed to SARS-CoV2.
+
+<<testdates>>=
+#Fit model
+m08 <- coviddatax %>% 
+  left_join(cumcase,by=c("testdate"="datum")) %>%
+  mutate(sex=factor(sex,labels = c("Male","Female"))) %>% 
+  
+  glm((value>=0.8)~group +
+        I((age-mean(age))/10)+
+        sex+totalcumcase,family = "poisson", data = .) 
+
+#Estimate heteroskedasticity consistent covariance matrix
+cov.m08 <- vcovHC(m08, type="HC0")
+
+#Estimate sandwich standard errors
+std.err <- sqrt(diag(cov.m08))
+
+#Estimate coefficients, 95% confidence intervals, 
+#p values and exponentiate to get risk ratios.
+r.est08 <- tibble(Term=names(coef(m08)), 
+                  Estimate= coef(m08), "Robust SE" = std.err,
+                  "Pr(>|z|)" = 2 * pnorm(abs(coef(m08)/std.err), 
+                                         lower.tail=FALSE),
+                  LL = coef(m08) - 1.96 * std.err,
+                  UL = coef(m08) + 1.96 * std.err) %>%
+  mutate(result=formateffectsize(Estimate,LL,UL,trans = T),
+         p=pvalformat(`Pr(>|z|)`))
+
+r.est08 %>% 
+  select(Term,`RR (95% CI)`=result,`P value`=p) %>% 
+  slice(-1) %>% 
+  mutate(Term=c("Healthcare Control",
+                "IMIDs Cytokine INH",
+                "IMIDs Non-Cytokine INH",
+                "Age, 10 year intervals",
+                "Female sex",
+                "Cumulative case count")) %>% 
+  kable(booktabs=T,caption = "Risk ratios from Poisson model with robust
+        variances.Adjusted by age, sex and cumulative case counts") %>% 
+  kable_styling()
+@
+
+\section{Supplementary figure 1, symptoms in seropositive participants clinically diagnosed vs. not diagnosed with COVID-19} 
+
+<<symptomaticcovidamongpositives,fig.cap="Symptoms of the seropositive">>=
+coviddatax %>% 
+  select(tscID,value,clinicalcovid,29:32,34:38,40,41)  %>% 
+  pivot_longer(-c(1:3), names_to = "symptom",values_to = "symptomstat") %>%
+  filter(value>=0.8) %>% 
+  mutate(tscID=factor(tscID)) %>% 
+  mutate(symptomstat=case_when(
+    symptomstat%in%c("1","ja")~"1",
+    symptomstat%in%c("0","nein","keine Angabe")~"0",
+    TRUE~"Not Assessed"
+  )) %>% 
+  group_by(tscID) %>% 
+  mutate(nsymptom=sum(as.numeric(symptomstat),na.rm = T)) %>% 
+  ungroup() %>% 
+  mutate(tscID=fct_reorder(factor(tscID),nsymptom,.fun =)) %>%
+  ggplot(aes(symptom,factor(tscID)))+
+  geom_tile(aes(fill=symptomstat),colour="gray90") +
+  facet_grid(fct_rev(factor(clinicalcovid,labels = c("Undiagnosed","Diagnosed")))~., 
+             scales = "free", 
+             space = "free_y",switch = "both") +
+  theme(axis.line.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.title.x = element_blank(),
+        axis.text.y = element_blank())+
+  labs(fill=NULL,y=NULL)+
+  scale_x_discrete(position = "top",guide = guide_axis(n.dodge = 2)) +
+  scale_fill_manual(values = c("#3E2D96", "#DDE637", "#ABABAB"))
+@
+
+\subsection{Plot deviations from expected symptom frequencies}
+This plots standardized Pearson's residuals from the chisquared test. For the "significant" tests, this plot gives an idea about which groups cause the significance. The labels can be fixed if we want to use it.
+
+\begin{landscape}
+\section{Estimate standardized residuals for exposure risk behaviour.}
+<<residualplot,fig.cap="Standardized residuals showing deviation of contact with febrile respiratory infections, presence in workplace and travel to risk areas and contact with documented COVID 19 cases from expected frequencies for each group.",fig.height=2.5,fig.width=10>>=
+
+#Preparedata for pearson residuals plot
+dodgewidth <- 0.7
+pivotcols <- c(27,28,64)
+coviddatax %>% 
+  pivot_longer(cols = pivotcols,
+               names_to = "variable",
+               values_to = "status_pre",
+               values_ptypes = list(status_pre = 'character')) %>% 
+  filter(!(status_pre %in% c("No data","keine Angabe",NA))) %>% 
+  mutate(status=case_when(status_pre %in% c("1","ja","Yes",
+                                            "Retired/Unemployed")~1,
+                          TRUE~0),
+         group=fct_rev(fct_relevel(group,c("IMID b-tsDMARD",
+                                           "IMID n-csDMARD")))) %>%
+  group_by(variable) %>% 
+  
+  #Estimate residuals for each variable
+  do(with(.,augment(chisq.test(table(group,status))))) %>% 
+  
+  #Get 0 values for HomeOffice, this indicates going to work
+  filter(status==ifelse(variable=="lhoHomeOffice",0,1)) %>% 
+  ungroup() %>% 
+  
+  mutate(variable=factor(variable,
+                         labels = c("Contact","Workplace",
+                                    "Risk area")),
+         group=fct_rev(fct_relevel(group,c("IMIDs Cytokine INH",
+                                           "IMIDs Non-Cytokine INH",
+                                           "Non-Healthcare Control",
+                                           "Healthcare Control")))) %>%
+  
+  #Plot residuals  
+  ggplot(aes(1,.stdres,group=group))+
+  geom_point( position = position_dodge(width = dodgewidth))+
+  geom_hline(yintercept = 0)+
+  geom_linerange(aes(ymin=0,ymax=.stdres),
+                 position = position_dodge(width = dodgewidth))+
+  coord_flip()+
+  scale_shape(solid = T)+
+  facet_wrap(variable~.,ncol = 3,strip.position = "top")+
+  scale_y_continuous(breaks=c(-5,0,5,10,15),labels = c(-5,0,5,10,15))+
+  theme(strip.background = element_blank(),
+        axis.text.y = element_blank(),
+        axis.line.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        strip.text = element_text(hjust = 0.3,size = 14))+
+  
+  annotate("text",x=0.74,y=-1.8,
+           label="HC Control",hjust=1,vjust=0.5)+
+  annotate("text",x=0.915,y=1.94,
+           label="NHC Control",hjust=0,vjust=0.5)+
+  annotate("text",x=1.09,y=1.94,
+           label="IMIDs No Cytokine INH",hjust=0,vjust=0.5)+
+  annotate("text",x=1.265,y=1.94,
+           label="IMIDs Cytokine INH",hjust=0,vjust=0.5)+
+  
+  labs(y="Standardized residuals",x=NULL,shape=NULL)
+@
+\end{landscape}
+
+\begin{landscape}
+\section{Breakdown of symptoms for groups and IgG status}
+
+<<symptomsbyserostatus,results='asis'>>=
+
+tablefinegroups<- coviddatax %>% 
+  mutate(serostatus=factor(value>=0.8,
+                           labels = c("IgG (-)","IgG(+)"))) %>% 
+  tabular((N=1)*(` `=1)*(` `=1)+ 
+            (`New MSk pain`=Factor(newpain%in%c("1","ja"),
+                                   levelnames =c("No","Yes")))*
+            Percent(denom = Equal(group),fn = npercent)+
+            
+            (`Night sweats`=Factor(nightsweats%in%c("1","ja"),
+                                   levelnames =c("No","Yes")))*
+            Percent(denom = Equal(group),fn = npercent)+
+            
+            (`Fever`=Factor(fever%in%c("1","ja"),
+                            levelnames =c("No","Yes")))*
+            Percent(denom = Equal(group),fn = npercent)+
+            
+            (`Malaise/Fatigue`=Factor(malaisefatigue%in%c("1","ja"),
+                                      levelnames =c("No","Yes")))*
+            Percent(denom = Equal(group),fn = npercent)+
+            
+            (`Headache`=Factor(headache%in%c("1","ja"),
+                               levelnames =c("No","Yes")))*
+            Percent(denom = Equal(group),fn = npercent)+
+            
+            (`Rhinitis`=Factor(runnynose%in%c("1","ja"),
+                               levelnames =c("No","Yes")))*
+            Percent(denom = Equal(group),fn = npercent)+
+            
+            (`Shortness of breath`=Factor(shortnessofbreath%in%c("1","ja"),
+                                          levelnames =c("No","Yes")))*
+            Percent(denom = Equal(group),fn = npercent)+
+            
+            (`Cough`=Factor(cough%in%c("1","ja"),
+                            levelnames =c("No","Yes")))*
+            Percent(denom = Equal(group),fn = npercent)+
+            
+            (`Throat pain`=Factor(throatpain%in%c("1","ja"),
+                                  levelnames =c("No","Yes")))*
+            Percent(denom = Equal(group),fn = npercent)+
+            
+            (`Anosmia`=Factor(anosmia%in%c("1","ja"),
+                              levelnames =c("No","Yes")))*
+            Percent(denom = Equal(group),fn = npercent)+
+            
+            (`Diarrhea`=Factor(diarrhea%in%c("1","ja"),
+                               levelnames =c("No","Yes")))*
+            Percent(denom = Equal(group),fn = npercent)
+          ~
+            
+            Heading()*Factor(group),
+          data = . ) 
+
+latex(tablefinegroups,options = 
+        list(tabular="longtable",
+             toprule="\\caption{Symptoms by serostatus and group}\\\\\\toprule",
+             midrule="\\midrule\\\\[-1\\normalbaselineskip]\\endhead\\hline\\endfoot"))
+
+write.csv.tabular(tablefinegroups,"symptombreakdown.csv")
+
+#write source data to file
+
+coviddatax %>% 
+  select(tscID,group,`New musculoskeletal pain`=newpain,
+         `Night sweats`=nightsweats,Fever=fever,`Malaise/Fatigue`=malaisefatigue,
+         Headache=headache, Rhinitis=runnynose,`Shortness of breath`=shortnessofbreath,
+         Cough=cough,`Throat pain`=throatpain,Anosmia=anosmia,diarrhea=diarrhea) %>% 
+  mutate_at(3:13, function(x) case_when(
+    x %in% c("1","ja") ~ "Yes",
+    x %in% c("0","nein") ~ "No",
+    TRUE ~ NA_character_
+  )) %>% write.csv("symptomdata.csv")
+
+@
+
+\end{landscape}
+
+\end{document}
